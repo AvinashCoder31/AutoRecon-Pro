@@ -1,669 +1,1378 @@
-#!/usr/bin/env python3
 """
-AutoRecon-Py Pro - Web Application Scanner Plugin
+AutoRecon-Pro Web Scanner Plugin
+Comprehensive web application scanning and enumeration
 """
 
 import asyncio
 import aiohttp
-import json
+import requests
+import subprocess
 import re
-from urllib.parse import urljoin, urlparse
-from typing import Dict, List, Any, Optional
+import json
+import logging
+from typing import Dict, List, Any, Optional, Tuple
 from pathlib import Path
-from core.plugin_manager import ServiceScanPlugin
+import time
+from urllib.parse import urljoin, urlparse
+import ssl
+from concurrent.futures import ThreadPoolExecutor
 
-class WebScanner(ServiceScanPlugin):
-    """Comprehensive web application scanner"""
+logger = logging.getLogger(__name__)
+
+class WebScanner:
+    """
+    Advanced web application scanner with multiple enumeration techniques
+    """
     
-    @property
-    def description(self) -> str:
-        return "Comprehensive web application scanner with directory bruteforce, technology detection, and vulnerability assessment"
-    
-    @property
-    def dependencies(self) -> List[str]:
-        return ['gobuster', 'nikto', 'whatweb', 'httpx']
-    
-    @property
-    def tags(self) -> List[str]:
-        return ['default', 'web', 'http', 'https']
-    
-    @property
-    def priority(self) -> int:
-        return 30
-    
-    def should_run(self, target_info: Dict[str, Any]) -> bool:
-        """Check if web services are present"""
-        services = target_info.get('services', {})
-        for port, service in services.items():
-            service_name = service.get('name', '').lower()
-            if 'http' in service_name or service.get('service', '').lower().startswith('http'):
-                return True
-        return False
-    
-    async def run(self, target_info: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute comprehensive web application scan"""
-        target = target_info['target']
-        output_dir = target_info.get('output_dir', '/tmp')
+    def __init__(self, config: Dict[str, Any] = None):
+        """
+        Initialize web scanner with configuration
         
+        Args:
+            config (Dict[str, Any], optional): Scanner configuration
+        """
+        self.config = config or {}
+        self.timeout = self.config.get('timeout', 30)
+        self.max_redirects = self.config.get('max_redirects', 5)
+        self.user_agent = self.config.get('user_agent', 'Mozilla/5.0 (compatible; AutoRecon-Pro)')
+        self.threads = self.config.get('threads', 10)
+        self.wordlist_dir = self.config.get('wordlist_dir', '/usr/share/wordlists')
+        
+        # Default wordlists
+        self.default_wordlists = {
+            'directories': [
+                '/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt',
+                '/usr/share/wordlists/dirb/common.txt',
+                'wordlists/directories.txt'
+            ],
+            'files': [
+                '/usr/share/wordlists/dirbuster/directory-list-2.3-files.txt',
+                'wordlists/files.txt'
+            ],
+            'extensions': ['php', 'asp', 'aspx', 'jsp', 'html', 'htm', 'js', 'txt', 'xml', 'json']
+        }
+        
+        # Common status codes to check
+        self.interesting_status_codes = [200, 201, 204, 301, 302, 307, 401, 403, 500, 503]
+        
+    async def scan_target(self, target: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Main scanning method for web targets
+        
+        Args:
+            target (str): Target URL or domain
+            options (Dict[str, Any], optional): Scan options
+            
+        Returns:
+            Dict[str, Any]: Comprehensive scan results
+        """
+        options = options or {}
         results = {
-            'web_services': [],
-            'directories': [],
-            'technologies': [],
-            'vulnerabilities': [],
-            'screenshots': [],
-            'headers_analysis': {},
-            'ssl_analysis': {},
-            'cms_detection': {},
-            'errors': []
+            'target': target,
+            'timestamp': time.time(),
+            'status': 'running',
+            'findings': []
         }
         
         try:
-            # Identify web services
-            web_services = self._identify_web_services(target_info)
-            results['web_services'] = web_services
+            # Normalize target URL
+            if not target.startswith(('http://', 'https://')):
+                # Try HTTPS first, fallback to HTTP
+                https_target = f"https://{target}"
+                if await self._check_url_accessibility(https_target):
+                    target = https_target
+                else:
+                    target = f"http://{target}"
             
-            if not web_services:
-                return results
+            results['normalized_target'] = target
+            logger.info(f"Starting web scan for {target}")
             
-            # Run scans for each web service
-            for web_service in web_services:
-                service_results = await self._scan_web_service(web_service, output_dir)
-                
-                # Merge results
-                results['directories'].extend(service_results.get('directories', []))
-                results['technologies'].extend(service_results.get('technologies', []))
-                results['vulnerabilities'].extend(service_results.get('vulnerabilities', []))
-                results['screenshots'].extend(service_results.get('screenshots', []))
-                results['headers_analysis'].update(service_results.get('headers_analysis', {}))
-                results['ssl_analysis'].update(service_results.get('ssl_analysis', {}))
-                results['cms_detection'].update(service_results.get('cms_detection', {}))
+            # Perform various scans
+            scan_tasks = []
             
-            return results
+            # Basic information gathering
+            scan_tasks.append(self._gather_basic_info(target))
+            
+            # Technology detection
+            scan_tasks.append(self._detect_technologies(target))
+            
+            # Directory enumeration
+            if options.get('directory_enum', True):
+                scan_tasks.append(self._enumerate_directories(target, options))
+            
+            # File enumeration
+            if options.get('file_enum', True):
+                scan_tasks.append(self._enumerate_files(target, options))
+            
+            # Vulnerability scanning
+            if options.get('vuln_scan', True):
+                scan_tasks.append(self._vulnerability_scan(target, options))
+            
+            # SSL/TLS analysis
+            if target.startswith('https://'):
+                scan_tasks.append(self._analyze_ssl(target))
+            
+            # Header analysis
+            scan_tasks.append(self._analyze_headers(target))
+            
+            # Robots.txt and sitemap analysis
+            scan_tasks.append(self._analyze_robots_sitemap(target))
+            
+            # Execute all scan tasks concurrently
+            scan_results = await asyncio.gather(*scan_tasks, return_exceptions=True)
+            
+            # Process results
+            for i, result in enumerate(scan_results):
+                if isinstance(result, Exception):
+                    logger.error(f"Scan task {i} failed: {str(result)}")
+                    results['findings'].append({
+                        'type': 'error',
+                        'message': f"Scan task failed: {str(result)}"
+                    })
+                elif isinstance(result, dict) and 'findings' in result:
+                    results['findings'].extend(result['findings'])
+                elif isinstance(result, dict):
+                    results.update(result)
+            
+            results['status'] = 'completed'
+            results['duration'] = time.time() - results['timestamp']
+            
+            logger.info(f"Web scan completed for {target} in {results['duration']:.2f}s")
             
         except Exception as e:
-            self.logger.error(f"Web scanner failed for {target}: {e}")
-            results['errors'].append(str(e))
-            return results
-    
-    def _identify_web_services(self, target_info: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Identify web services from target information"""
-        web_services = []
-        services = target_info.get('services', {})
-        target = target_info['target']
-        
-        for port, service_info in services.items():
-            service_name = service_info.get('name', '').lower()
-            port_num = port.split('/')[0]
-            
-            if 'http' in service_name or service_name in ['www', 'www-http']:
-                # Determine protocol
-                protocol = 'https' if 'ssl' in service_info.get('service', '').lower() or port_num == '443' else 'http'
-                
-                web_service = {
-                    'target': target,
-                    'port': port_num,
-                    'protocol': protocol,
-                    'url': f"{protocol}://{target}:{port_num}",
-                    'service_info': service_info
-                }
-                web_services.append(web_service)
-        
-        return web_services
-    
-    async def _scan_web_service(self, web_service: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-        """Scan a single web service"""
-        url = web_service['url']
-        self.logger.scan_start(url, "Web Service Scan")
-        
-        results = {
-            'directories': [],
-            'technologies': [],
-            'vulnerabilities': [],
-            'screenshots': [],
-            'headers_analysis': {},
-            'ssl_analysis': {},
-            'cms_detection': {}
-        }
-        
-        # Run concurrent web scans
-        scan_tasks = [
-            self._run_directory_bruteforce(web_service, output_dir),
-            self._run_technology_detection(web_service, output_dir),
-            self._run_vulnerability_scan(web_service, output_dir),
-            self._analyze_headers(web_service),
-            self._detect_cms(web_service)
-        ]
-        
-        # Add SSL analysis for HTTPS
-        if web_service['protocol'] == 'https':
-            scan_tasks.append(self._analyze_ssl(web_service))
-        
-        # Add screenshot capture if enabled
-        if self.config.get('features.screenshots', True):
-            scan_tasks.append(self._capture_screenshot(web_service, output_dir))
-        
-        # Execute all scans concurrently
-        scan_results = await asyncio.gather(*scan_tasks, return_exceptions=True)
-        
-        # Process results
-        for i, result in enumerate(scan_results):
-            if isinstance(result, Exception):
-                self.logger.error(f"Web scan task failed: {result}")
-                continue
-            
-            if i == 0:  # Directory bruteforce
-                results['directories'] = result.get('directories', [])
-            elif i == 1:  # Technology detection
-                results['technologies'] = result.get('technologies', [])
-            elif i == 2:  # Vulnerability scan
-                results['vulnerabilities'] = result.get('vulnerabilities', [])
-            elif i == 3:  # Headers analysis
-                results['headers_analysis'] = result
-            elif i == 4:  # CMS detection
-                results['cms_detection'] = result
-            elif i == 5 and web_service['protocol'] == 'https':  # SSL analysis
-                results['ssl_analysis'] = result
-            elif (i == 5 and web_service['protocol'] == 'http') or i == 6:  # Screenshot
-                results['screenshots'] = result.get('screenshots', [])
-        
-        self.logger.scan_complete(url, "Web Service Scan", 0)
-        return results
-    
-    async def _run_directory_bruteforce(self, web_service: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-        """Run directory bruteforce using gobuster"""
-        url = web_service['url']
-        target = web_service['target']
-        port = web_service['port']
-        
-        self.logger.info(f"Running directory bruteforce on {url}")
-        
-        # Determine wordlist
-        wordlist_dir = self.config.get('wordlists.directory', '/usr/share/wordlists')
-        wordlist_file = f"{wordlist_dir}/dirb/common.txt"
-        
-        if not Path(wordlist_file).exists():
-            wordlist_file = "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt"
-        
-        # Output file
-        output_file = f"{output_dir}/gobuster_{target}_{port}.txt"
-        
-        # Build gobuster command
-        cmd_parts = [
-            'gobuster', 'dir',
-            f'-u {url}',
-            f'-w {wordlist_file}',
-            f'-o {output_file}',
-            f'-t {self.config.get("tools.gobuster.threads", 50)}',
-            '--quiet',
-            '--no-error'
-        ]
-        
-        # Add extensions
-        extensions = self.config.get('tools.gobuster.extensions', 'php,html,txt,js,css,xml,json')
-        if extensions:
-            cmd_parts.append(f'-x {extensions}')
-        
-        # Add status codes
-        cmd_parts.append('-s 200,204,301,302,307,401,403,405,500')
-        
-        command = ' '.join(cmd_parts)
-        
-        result = await self.execute_command(command)
-        
-        screenshots = []
-        if result['exit_code'] == 0 and Path(screenshot_file).exists():
-            screenshots.append({
-                'url': url,
-                'file': screenshot_file,
-                'timestamp': asyncio.get_event_loop().time()
+            logger.error(f"Basic info gathering failed for {target}: {str(e)}")
+            info['findings'].append({
+                'type': 'error',
+                'category': 'basic_info',
+                'title': 'Basic Info Gathering Error',
+                'data': {'error': str(e)}
             })
-            self.logger.success(f"Screenshot captured: {screenshot_file}")
-        else:
-            self.logger.error(f"Failed to capture screenshot for {url}")
         
-        return {'screenshots': screenshots}
+        return info
     
-    async def execute_command(self, command: str) -> Dict[str, Any]:
-        """Execute command using scanner engine"""
-        import subprocess
-        import shlex
+    async def _detect_technologies(self, target: str) -> Dict[str, Any]:
+        """
+        Detect web technologies using various methods
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: Detected technologies
+        """
+        tech_info = {'findings': []}
+        detected_techs = set()
         
         try:
-            cmd_args = shlex.split(command)
-            process = await asyncio.create_subprocess_exec(
-                *cmd_args,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+            # Use WhatWeb if available
+            whatweb_result = await self._run_whatweb(target)
+            if whatweb_result:
+                detected_techs.update(whatweb_result)
+            
+            # Manual technology detection
+            manual_techs = await self._manual_tech_detection(target)
+            detected_techs.update(manual_techs)
+            
+            if detected_techs:
+                tech_info['findings'].append({
+                    'type': 'info',
+                    'category': 'technology',
+                    'title': 'Detected Technologies',
+                    'data': {'technologies': list(detected_techs)}
+                })
+            
+        except Exception as e:
+            logger.error(f"Technology detection failed for {target}: {str(e)}")
+            tech_info['findings'].append({
+                'type': 'error',
+                'category': 'technology',
+                'title': 'Technology Detection Error',
+                'data': {'error': str(e)}
+            })
+        
+        return tech_info
+    
+    async def _run_whatweb(self, target: str) -> List[str]:
+        """
+        Run WhatWeb tool for technology detection
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            List[str]: Detected technologies
+        """
+        try:
+            cmd = ['whatweb', '--log-brief', target]
+            result = subprocess.run(
+                cmd, 
+                capture_output=True, 
+                text=True, 
+                timeout=60
             )
             
-            stdout, stderr = await process.communicate()
+            if result.returncode == 0:
+                # Parse WhatWeb output
+                technologies = []
+                for line in result.stdout.split('\n'):
+                    if target in line:
+                        # Extract technology names
+                        tech_matches = re.findall(r'(\w+)\[', line)
+                        technologies.extend(tech_matches)
+                
+                return technologies
             
-            return {
-                'command': command,
-                'exit_code': process.returncode,
-                'stdout': stdout.decode('utf-8', errors='ignore'),
-                'stderr': stderr.decode('utf-8', errors='ignore')
-            }
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.debug("WhatWeb not available or timed out")
         except Exception as e:
-            return {
-                'command': command,
-                'exit_code': -1,
-                'stdout': '',
-                'stderr': str(e),
-                'error': str(e)
-            }_command(command)
+            logger.debug(f"WhatWeb execution failed: {str(e)}")
         
-        directories = []
-        if result['exit_code'] == 0:
-            # Parse gobuster output
-            directories = self._parse_gobuster_output(result['stdout'])
-            
-            # Also read from output file if it exists
-            if Path(output_file).exists():
-                with open(output_file, 'r') as f:
-                    file_dirs = self._parse_gobuster_output(f.read())
-                    directories.extend(file_dirs)
-            
-            self.logger.success(f"Found {len(directories)} directories/files")
-            
-            # Log interesting findings
-            for directory in directories:
-                if any(keyword in directory['path'].lower() for keyword in ['admin', 'login', 'backup', 'config']):
-                    self.logger.finding('Interesting Directory', url, directory['path'])
-        
-        return {'directories': directories}
+        return []
     
-    def _parse_gobuster_output(self, output: str) -> List[Dict[str, Any]]:
-        """Parse gobuster output"""
-        directories = []
-        lines = output.strip().split('\n')
+    async def _manual_tech_detection(self, target: str) -> List[str]:
+        """
+        Manual technology detection based on headers and content
         
-        for line in lines:
-            line = line.strip()
-            if not line or line.startswith('=') or 'Gobuster' in line:
-                continue
+        Args:
+            target (str): Target URL
             
-            # Parse gobuster line format: /path (Status: 200) [Size: 1234]
-            match = re.match(r'(/\S*)\s+\(Status:\s+(\d+)\)\s+\[Size:\s+(\d+)\]', line)
-            if match:
-                path, status, size = match.groups()
-                directories.append({
-                    'path': path,
-                    'status': int(status),
-                    'size': int(size),
-                    'url': path
-                })
-        
-        return directories
-    
-    async def _run_technology_detection(self, web_service: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-        """Run technology detection using whatweb"""
-        url = web_service['url']
-        
-        self.logger.info(f"Detecting technologies on {url}")
-        
-        # Output file
-        output_file = f"{output_dir}/whatweb_{web_service['target']}_{web_service['port']}.json"
-        
-        # Build whatweb command
-        cmd_parts = [
-            'whatweb',
-            f'--aggression={self.config.get("tools.whatweb.aggression", 3)}',
-            '--log-json=' + output_file,
-            url
-        ]
-        
-        command = ' '.join(cmd_parts)
-        
-        result = await self.execute_command(command)
-        
+        Returns:
+            List[str]: Detected technologies
+        """
         technologies = []
-        if result['exit_code'] == 0:
-            # Parse whatweb output
-            technologies = self._parse_whatweb_output(result['stdout'])
-            
-            # Also try to parse JSON output file
-            if Path(output_file).exists():
-                try:
-                    with open(output_file, 'r') as f:
-                        json_data = json.load(f)
-                        json_techs = self._parse_whatweb_json(json_data)
-                        technologies.extend(json_techs)
-                except:
-                    pass
-            
-            self.logger.success(f"Detected {len(technologies)} technologies")
-        
-        return {'technologies': technologies}
-    
-    def _parse_whatweb_output(self, output: str) -> List[Dict[str, Any]]:
-        """Parse whatweb output"""
-        technologies = []
-        lines = output.strip().split('\n')
-        
-        for line in lines:
-            if '[200 OK]' in line or '[301' in line or '[302' in line:
-                # Extract technologies from line
-                tech_matches = re.findall(r'(\w+)\[([^\]]*)\]', line)
-                for tech_name, tech_info in tech_matches:
-                    if tech_name not in ['Country', 'IP']:
-                        technologies.append({
-                            'name': tech_name,
-                            'version': tech_info if tech_info else 'Unknown',
-                            'confidence': 'High'
-                        })
-        
-        return technologies
-    
-    def _parse_whatweb_json(self, json_data: List[Dict]) -> List[Dict[str, Any]]:
-        """Parse whatweb JSON output"""
-        technologies = []
-        
-        for entry in json_data:
-            plugins = entry.get('plugins', {})
-            for plugin_name, plugin_data in plugins.items():
-                if isinstance(plugin_data, dict):
-                    version = plugin_data.get('version', ['Unknown'])
-                    if isinstance(version, list):
-                        version = version[0] if version else 'Unknown'
-                    
-                    technologies.append({
-                        'name': plugin_name,
-                        'version': version,
-                        'confidence': 'High'
-                    })
-        
-        return technologies
-    
-    async def _run_vulnerability_scan(self, web_service: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-        """Run vulnerability scan using nikto"""
-        url = web_service['url']
-        
-        self.logger.info(f"Running vulnerability scan on {url}")
-        
-        # Output file
-        output_file = f"{output_dir}/nikto_{web_service['target']}_{web_service['port']}.txt"
-        
-        # Build nikto command
-        cmd_parts = [
-            'nikto',
-            f'-h {url}',
-            f'-o {output_file}',
-            '-Format txt',
-            f'-timeout {self.config.get("tools.nikto.timeout", 600)}'
-        ]
-        
-        command = ' '.join(cmd_parts)
-        
-        result = await self.execute_command(command)
-        
-        vulnerabilities = []
-        if result['exit_code'] == 0:
-            # Parse nikto output
-            vulnerabilities = self._parse_nikto_output(result['stdout'])
-            
-            self.logger.success(f"Found {len(vulnerabilities)} potential vulnerabilities")
-            
-            # Log high-severity findings
-            for vuln in vulnerabilities:
-                if vuln.get('severity', '').upper() in ['HIGH', 'CRITICAL']:
-                    self.logger.vulnerability('Web Vulnerability', url, vuln['severity'], vuln['description'])
-        
-        return {'vulnerabilities': vulnerabilities}
-    
-    def _parse_nikto_output(self, output: str) -> List[Dict[str, Any]]:
-        """Parse nikto output"""
-        vulnerabilities = []
-        lines = output.strip().split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            if line.startswith('+') and not line.startswith('+ Target'):
-                # Remove the + prefix and parse
-                vuln_text = line[1:].strip()
-                
-                # Determine severity based on keywords
-                severity = 'INFO'
-                if any(keyword in vuln_text.lower() for keyword in ['critical', 'high risk']):
-                    severity = 'HIGH'
-                elif any(keyword in vuln_text.lower() for keyword in ['medium', 'warning']):
-                    severity = 'MEDIUM'
-                elif any(keyword in vuln_text.lower() for keyword in ['low', 'info']):
-                    severity = 'LOW'
-                
-                vulnerabilities.append({
-                    'description': vuln_text,
-                    'severity': severity,
-                    'source': 'nikto'
-                })
-        
-        return vulnerabilities
-    
-    async def _analyze_headers(self, web_service: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze HTTP headers for security issues"""
-        url = web_service['url']
-        
-        self.logger.info(f"Analyzing HTTP headers for {url}")
         
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url, allow_redirects=False) as response:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                async with session.get(target, ssl=False) as response:
                     headers = dict(response.headers)
+                    content = await response.text()
                     
-                    analysis = {
-                        'headers': headers,
-                        'security_headers': {},
-                        'missing_headers': [],
-                        'issues': []
+                    # Header-based detection
+                    header_techs = {
+                        'Apache': ['Apache'],
+                        'Nginx': ['nginx'],
+                        'IIS': ['Microsoft-IIS'],
+                        'PHP': ['PHP'],
+                        'ASP.NET': ['ASP.NET'],
+                        'Express': ['Express'],
+                        'Cloudflare': ['cloudflare']
                     }
                     
-                    # Check for security headers
-                    security_headers = [
-                        'X-Frame-Options',
-                        'X-Content-Type-Options',
-                        'X-XSS-Protection',
-                        'Strict-Transport-Security',
-                        'Content-Security-Policy',
-                        'Referrer-Policy'
-                    ]
+                    for tech, signatures in header_techs.items():
+                        for sig in signatures:
+                            if any(sig.lower() in str(v).lower() for v in headers.values()):
+                                technologies.append(tech)
+                                break
                     
-                    for header in security_headers:
+                    # Content-based detection
+                    content_lower = content.lower()
+                    content_techs = {
+                        'WordPress': ['wp-content', 'wordpress', 'wp-includes'],
+                        'Drupal': ['drupal', '/sites/all/', '/sites/default/'],
+                        'Joomla': ['joomla', '/media/jui/', 'option=com_'],
+                        'jQuery': ['jquery'],
+                        'Bootstrap': ['bootstrap'],
+                        'React': ['react', '__reactinternalinstance'],
+                        'Angular': ['angular', 'ng-'],
+                        'Vue.js': ['vue.js', '__vue__'],
+                        'Django': ['csrfmiddlewaretoken', 'django'],
+                        'Laravel': ['laravel_session', '_token'],
+                        'Spring': ['spring', 'jsessionid']
+                    }
+                    
+                    for tech, signatures in content_techs.items():
+                        if any(sig in content_lower for sig in signatures):
+                            technologies.append(tech)
+                    
+                    # Check for specific files/paths
+                    common_files = {
+                        'WordPress': ['/wp-admin/', '/wp-login.php'],
+                        'Drupal': ['/user/login', '/admin/'],
+                        'Joomla': ['/administrator/', '/index.php?option=com_'],
+                        'phpMyAdmin': ['/phpmyadmin/', '/pma/']
+                    }
+                    
+                    for tech, paths in common_files.items():
+                        for path in paths:
+                            test_url = urljoin(target, path)
+                            try:
+                                async with session.head(test_url, ssl=False) as test_response:
+                                    if test_response.status == 200:
+                                        technologies.append(tech)
+                                        break
+                            except Exception:
+                                continue
+        
+        except Exception as e:
+            logger.debug(f"Manual tech detection failed: {str(e)}")
+        
+        return list(set(technologies))
+    
+    async def _enumerate_directories(self, target: str, options: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enumerate directories using wordlists
+        
+        Args:
+            target (str): Target URL
+            options (Dict[str, Any]): Enumeration options
+            
+        Returns:
+            Dict[str, Any]: Directory enumeration results
+        """
+        dir_info = {'findings': []}
+        
+        try:
+            # Use Gobuster if available
+            gobuster_results = await self._run_gobuster(target, 'directories', options)
+            if gobuster_results:
+                dir_info['findings'].extend(gobuster_results)
+            
+            # Manual directory enumeration
+            manual_results = await self._manual_directory_enum(target, options)
+            if manual_results:
+                dir_info['findings'].extend(manual_results)
+            
+        except Exception as e:
+            logger.error(f"Directory enumeration failed for {target}: {str(e)}")
+            dir_info['findings'].append({
+                'type': 'error',
+                'category': 'directory_enum',
+                'title': 'Directory Enumeration Error',
+                'data': {'error': str(e)}
+            })
+        
+        return dir_info
+    
+    async def _run_gobuster(self, target: str, scan_type: str, options: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Run Gobuster for directory/file enumeration
+        
+        Args:
+            target (str): Target URL
+            scan_type (str): Type of scan ('directories' or 'files')
+            options (Dict[str, Any]): Scan options
+            
+        Returns:
+            List[Dict[str, Any]]: Gobuster results
+        """
+        results = []
+        
+        try:
+            # Find appropriate wordlist
+            wordlist = self._get_wordlist(scan_type, options)
+            if not wordlist:
+                return results
+            
+            # Build Gobuster command
+            cmd = [
+                'gobuster', 'dir',
+                '-u', target,
+                '-w', wordlist,
+                '-t', str(options.get('threads', self.threads)),
+                '-x', ','.join(self.default_wordlists['extensions']),
+                '-s', '200,204,301,302,307,401,403',
+                '--timeout', f"{self.timeout}s",
+                '--useragent', self.user_agent
+            ]
+            
+            # Add quiet mode
+            cmd.extend(['-q'])
+            
+            # Execute Gobuster
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minutes timeout
+            )
+            
+            if process.returncode == 0:
+                # Parse Gobuster output
+                for line in process.stdout.split('\n'):
+                    if line.strip() and not line.startswith('='):
+                        # Parse line format: /path (Status: 200) [Size: 1234]
+                        match = re.match(r'(/[^\s]*)\s+\(Status:\s+(\d+)\)\s+\[Size:\s+(\d+)\]', line)
+                        if match:
+                            path, status, size = match.groups()
+                            results.append({
+                                'type': 'finding',
+                                'category': 'directory_enum',
+                                'title': f'Directory/File Found: {path}',
+                                'data': {
+                                    'path': path,
+                                    'url': urljoin(target, path),
+                                    'status_code': int(status),
+                                    'size': int(size),
+                                    'method': 'gobuster'
+                                },
+                                'severity': 'info'
+                            })
+            
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Gobuster timed out for {target}")
+        except FileNotFoundError:
+            logger.debug("Gobuster not available")
+        except Exception as e:
+            logger.debug(f"Gobuster execution failed: {str(e)}")
+        
+        return results
+    
+    async def _manual_directory_enum(self, target: str, options: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Manual directory enumeration using common paths
+        
+        Args:
+            target (str): Target URL
+            options (Dict[str, Any]): Enumeration options
+            
+        Returns:
+            List[Dict[str, Any]]: Manual enumeration results
+        """
+        results = []
+        
+        # Common directories to check
+        common_dirs = [
+            '/admin/', '/administrator/', '/wp-admin/', '/phpmyadmin/',
+            '/backup/', '/backups/', '/config/', '/conf/', '/inc/',
+            '/includes/', '/uploads/', '/images/', '/css/', '/js/',
+            '/api/', '/v1/', '/v2/', '/test/', '/dev/', '/staging/',
+            '/.git/', '/.svn/', '/.env', '/robots.txt', '/sitemap.xml'
+        ]
+        
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                # Check common directories
+                for directory in common_dirs:
+                    try:
+                        test_url = urljoin(target, directory)
+                        async with session.head(test_url, ssl=False) as response:
+                            if response.status in self.interesting_status_codes:
+                                results.append({
+                                    'type': 'finding',
+                                    'category': 'directory_enum',
+                                    'title': f'Accessible Path: {directory}',
+                                    'data': {
+                                        'path': directory,
+                                        'url': test_url,
+                                        'status_code': response.status,
+                                        'method': 'manual'
+                                    },
+                                    'severity': 'info' if response.status == 200 else 'low'
+                                })
+                    except Exception:
+                        continue
+        
+        except Exception as e:
+            logger.debug(f"Manual directory enumeration failed: {str(e)}")
+        
+        return results
+    
+    async def _enumerate_files(self, target: str, options: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Enumerate files using various techniques
+        
+        Args:
+            target (str): Target URL
+            options (Dict[str, Any]): Enumeration options
+            
+        Returns:
+            Dict[str, Any]: File enumeration results
+        """
+        file_info = {'findings': []}
+        
+        try:
+            # Common file enumeration
+            common_files = [
+                'robots.txt', 'sitemap.xml', '.htaccess', 'web.config',
+                'readme.txt', 'README.md', 'changelog.txt', 'license.txt',
+                'backup.sql', 'database.sql', 'config.php', 'wp-config.php',
+                '.env', '.git/config', 'crossdomain.xml', 'clientaccesspolicy.xml'
+            ]
+            
+            found_files = await self._check_common_files(target, common_files)
+            file_info['findings'].extend(found_files)
+            
+            # Backup file enumeration
+            backup_files = await self._enumerate_backup_files(target)
+            file_info['findings'].extend(backup_files)
+            
+        except Exception as e:
+            logger.error(f"File enumeration failed for {target}: {str(e)}")
+            file_info['findings'].append({
+                'type': 'error',
+                'category': 'file_enum',
+                'title': 'File Enumeration Error',
+                'data': {'error': str(e)}
+            })
+        
+        return file_info
+    
+    async def _check_common_files(self, target: str, files: List[str]) -> List[Dict[str, Any]]:
+        """
+        Check for common files
+        
+        Args:
+            target (str): Target URL
+            files (List[str]): List of files to check
+            
+        Returns:
+            List[Dict[str, Any]]: Found files
+        """
+        results = []
+        
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                for file in files:
+                    try:
+                        test_url = urljoin(target, file)
+                        async with session.get(test_url, ssl=False) as response:
+                            if response.status == 200:
+                                content = await response.text()
+                                results.append({
+                                    'type': 'finding',
+                                    'category': 'file_enum',
+                                    'title': f'Accessible File: {file}',
+                                    'data': {
+                                        'file': file,
+                                        'url': test_url,
+                                        'status_code': response.status,
+                                        'size': len(content),
+                                        'content_preview': content[:500] if len(content) > 500 else content
+                                    },
+                                    'severity': 'medium' if file in ['.env', 'wp-config.php', 'config.php'] else 'info'
+                                })
+                    except Exception:
+                        continue
+        
+        except Exception as e:
+            logger.debug(f"Common file check failed: {str(e)}")
+        
+        return results
+    
+    async def _enumerate_backup_files(self, target: str) -> List[Dict[str, Any]]:
+        """
+        Enumerate potential backup files
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            List[Dict[str, Any]]: Found backup files
+        """
+        results = []
+        
+        # Parse target to get potential backup file names
+        parsed_url = urlparse(target)
+        domain = parsed_url.netloc.split('.')[0]
+        
+        backup_patterns = [
+            f'{domain}.zip', f'{domain}.tar.gz', f'{domain}.backup',
+            'backup.zip', 'backup.tar.gz', 'site.zip', 'www.zip',
+            'backup.sql', 'database.sql', f'{domain}.sql'
+        ]
+        
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                for backup_file in backup_patterns:
+                    try:
+                        test_url = urljoin(target, backup_file)
+                        async with session.head(test_url, ssl=False) as response:
+                            if response.status == 200:
+                                results.append({
+                                    'type': 'finding',
+                                    'category': 'file_enum',
+                                    'title': f'Potential Backup File: {backup_file}',
+                                    'data': {
+                                        'file': backup_file,
+                                        'url': test_url,
+                                        'status_code': response.status,
+                                        'content_type': response.headers.get('Content-Type', 'Unknown')
+                                    },
+                                    'severity': 'high'
+                                })
+                    except Exception:
+                        continue
+        
+        except Exception as e:
+            logger.debug(f"Backup file enumeration failed: {str(e)}")
+        
+        return results
+    
+    async def _vulnerability_scan(self, target: str, options: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Perform vulnerability scanning
+        
+        Args:
+            target (str): Target URL
+            options (Dict[str, Any]): Scan options
+            
+        Returns:
+            Dict[str, Any]: Vulnerability scan results
+        """
+        vuln_info = {'findings': []}
+        
+        try:
+            # Run Nikto if available
+            nikto_results = await self._run_nikto(target, options)
+            if nikto_results:
+                vuln_info['findings'].extend(nikto_results)
+            
+            # Manual vulnerability checks
+            manual_vulns = await self._manual_vuln_checks(target)
+            if manual_vulns:
+                vuln_info['findings'].extend(manual_vulns)
+            
+        except Exception as e:
+            logger.error(f"Vulnerability scan failed for {target}: {str(e)}")
+            vuln_info['findings'].append({
+                'type': 'error',
+                'category': 'vulnerability',
+                'title': 'Vulnerability Scan Error',
+                'data': {'error': str(e)}
+            })
+        
+        return vuln_info
+    
+    async def _run_nikto(self, target: str, options: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """
+        Run Nikto vulnerability scanner
+        
+        Args:
+            target (str): Target URL
+            options (Dict[str, Any]): Scan options
+            
+        Returns:
+            List[Dict[str, Any]]: Nikto results
+        """
+        results = []
+        
+        try:
+            cmd = [
+                'nikto',
+                '-h', target,
+                '-Format', 'txt',
+                '-timeout', str(self.timeout)
+            ]
+            
+            process = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300  # 5 minutes timeout
+            )
+            
+            if process.returncode == 0:
+                # Parse Nikto output
+                lines = process.stdout.split('\n')
+                for line in lines:
+                    if '+ ' in line and 'OSVDB' in line:
+                        # Parse Nikto finding
+                        results.append({
+                            'type': 'finding',
+                            'category': 'vulnerability',
+                            'title': 'Nikto Finding',
+                            'data': {
+                                'description': line.strip(),
+                                'tool': 'nikto'
+                            },
+                            'severity': 'medium'
+                        })
+            
+        except subprocess.TimeoutExpired:
+            logger.warning(f"Nikto timed out for {target}")
+        except FileNotFoundError:
+            logger.debug("Nikto not available")
+        except Exception as e:
+            logger.debug(f"Nikto execution failed: {str(e)}")
+        
+        return results
+    
+    async def _manual_vuln_checks(self, target: str) -> List[Dict[str, Any]]:
+        """
+        Manual vulnerability checks
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            List[Dict[str, Any]]: Manual vulnerability findings
+        """
+        results = []
+        
+        try:
+            # Check for common vulnerabilities
+            vuln_checks = [
+                self._check_clickjacking(target),
+                self._check_cors_misconfiguration(target),
+                self._check_security_headers(target),
+                self._check_directory_listing(target)
+            ]
+            
+            vuln_results = await asyncio.gather(*vuln_checks, return_exceptions=True)
+            
+            for result in vuln_results:
+                if isinstance(result, list):
+                    results.extend(result)
+                elif isinstance(result, dict):
+                    results.append(result)
+        
+        except Exception as e:
+            logger.debug(f"Manual vulnerability checks failed: {str(e)}")
+        
+        return results
+    
+    def _get_wordlist(self, scan_type: str, options: Dict[str, Any]) -> Optional[str]:
+        """
+        Get appropriate wordlist for scan type
+        
+        Args:
+            scan_type (str): Type of scan
+            options (Dict[str, Any]): Scan options
+            
+        Returns:
+            Optional[str]: Path to wordlist file
+        """
+        # Check if custom wordlist is specified
+        custom_wordlist = options.get('wordlist')
+        if custom_wordlist and Path(custom_wordlist).exists():
+            return custom_wordlist
+        
+        # Use default wordlists
+        wordlists = self.default_wordlists.get(scan_type, [])
+        
+        for wordlist in wordlists:
+            if Path(wordlist).exists():
+                return wordlist
+        
+        logger.warning(f"No wordlist found for {scan_type}")
+        return None
+    
+    async def _analyze_ssl(self, target: str) -> Dict[str, Any]:
+        """
+        Analyze SSL/TLS configuration
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: SSL analysis results
+        """
+        ssl_info = {'findings': []}
+        
+        try:
+            from utils.network import NetworkUtils
+            network_utils = NetworkUtils()
+            
+            # Extract hostname and port from URL
+            from urllib.parse import urlparse
+            parsed = urlparse(target)
+            hostname = parsed.hostname
+            port = parsed.port or 443
+            
+            # Check SSL certificate
+            cert_info = network_utils.check_ssl_certificate(hostname, port)
+            
+            if cert_info.get('valid'):
+                ssl_info['findings'].append({
+                    'type': 'info',
+                    'category': 'ssl_analysis',
+                    'title': 'SSL Certificate Information',
+                    'data': cert_info,
+                    'severity': 'info'
+                })
+                
+                # Check for security issues
+                if cert_info.get('expired'):
+                    ssl_info['findings'].append({
+                        'type': 'finding',
+                        'category': 'ssl_analysis',
+                        'title': 'Expired SSL Certificate',
+                        'data': {'expiration_date': cert_info.get('not_after')},
+                        'severity': 'high'
+                    })
+                
+                days_until_expiration = cert_info.get('days_until_expiration', 0)
+                if 0 < days_until_expiration < 30:
+                    ssl_info['findings'].append({
+                        'type': 'finding',
+                        'category': 'ssl_analysis',
+                        'title': 'SSL Certificate Expiring Soon',
+                        'data': {'days_remaining': days_until_expiration},
+                        'severity': 'medium'
+                    })
+            
+            elif cert_info.get('error'):
+                ssl_info['findings'].append({
+                    'type': 'finding',
+                    'category': 'ssl_analysis',
+                    'title': 'SSL Certificate Error',
+                    'data': {'error': cert_info['error']},
+                    'severity': 'medium'
+                })
+        
+        except Exception as e:
+            logger.debug(f"SSL analysis failed: {str(e)}")
+            ssl_info['findings'].append({
+                'type': 'error',
+                'category': 'ssl_analysis',
+                'title': 'SSL Analysis Error',
+                'data': {'error': str(e)}
+            })
+        
+        return ssl_info
+    
+    async def _analyze_headers(self, target: str) -> Dict[str, Any]:
+        """
+        Analyze HTTP headers for security issues
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: Header analysis results
+        """
+        header_info = {'findings': []}
+        
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                async with session.get(target, ssl=False) as response:
+                    headers = dict(response.headers)
+                    
+                    # Security headers to check
+                    security_headers = {
+                        'X-Frame-Options': 'Clickjacking protection',
+                        'X-Content-Type-Options': 'MIME type sniffing protection',
+                        'X-XSS-Protection': 'XSS protection',
+                        'Strict-Transport-Security': 'HTTPS enforcement',
+                        'Content-Security-Policy': 'Content security policy',
+                        'Referrer-Policy': 'Referrer policy',
+                        'Permissions-Policy': 'Feature policy'
+                    }
+                    
+                    missing_headers = []
+                    for header, description in security_headers.items():
+                        if header not in headers:
+                            missing_headers.append({'header': header, 'description': description})
+                    
+                    if missing_headers:
+                        header_info['findings'].append({
+                            'type': 'finding',
+                            'category': 'security_headers',
+                            'title': 'Missing Security Headers',
+                            'data': {'missing_headers': missing_headers},
+                            'severity': 'medium'
+                        })
+                    
+                    # Check for information disclosure in headers
+                    disclosure_headers = ['Server', 'X-Powered-By', 'X-AspNet-Version']
+                    disclosed_info = {}
+                    
+                    for header in disclosure_headers:
                         if header in headers:
-                            analysis['security_headers'][header] = headers[header]
-                        else:
-                            analysis['missing_headers'].append(header)
+                            disclosed_info[header] = headers[header]
                     
-                    # Check for problematic headers
-                    if 'Server' in headers:
-                        analysis['issues'].append({
-                            'type': 'Information Disclosure',
-                            'description': f"Server header reveals: {headers['Server']}",
-                            'severity': 'LOW'
+                    if disclosed_info:
+                        header_info['findings'].append({
+                            'type': 'finding',
+                            'category': 'information_disclosure',
+                            'title': 'Information Disclosure in Headers',
+                            'data': {'disclosed_headers': disclosed_info},
+                            'severity': 'low'
                         })
                     
-                    # Check for missing security headers
-                    if analysis['missing_headers']:
-                        analysis['issues'].append({
-                            'type': 'Missing Security Headers',
-                            'description': f"Missing headers: {', '.join(analysis['missing_headers'])}",
-                            'severity': 'MEDIUM'
-                        })
-                    
-                    return analysis
-                    
-        except Exception as e:
-            self.logger.error(f"Failed to analyze headers for {url}: {e}")
-            return {'error': str(e)}
-    
-    async def _analyze_ssl(self, web_service: Dict[str, Any]) -> Dict[str, Any]:
-        """Analyze SSL/TLS configuration"""
-        url = web_service['url']
-        target = web_service['target']
-        port = web_service['port']
-        
-        self.logger.info(f"Analyzing SSL/TLS for {url}")
-        
-        # Use sslscan if available
-        command = f"sslscan --no-colour {target}:{port}"
-        
-        result = await self.execute_command(command)
-        
-        if result['exit_code'] == 0:
-            return self._parse_sslscan_output(result['stdout'])
-        else:
-            return {'error': 'SSL analysis failed'}
-    
-    def _parse_sslscan_output(self, output: str) -> Dict[str, Any]:
-        """Parse sslscan output"""
-        analysis = {
-            'supported_protocols': [],
-            'supported_ciphers': [],
-            'certificate_info': {},
-            'vulnerabilities': []
-        }
-        
-        lines = output.split('\n')
-        
-        for line in lines:
-            line = line.strip()
-            
-            # Parse supported protocols
-            if 'Enabled' in line and any(proto in line for proto in ['SSLv2', 'SSLv3', 'TLSv1']):
-                if 'SSLv2' in line or 'SSLv3' in line:
-                    analysis['vulnerabilities'].append({
-                        'type': 'Weak Protocol',
-                        'description': f"Weak SSL/TLS protocol enabled: {line}",
-                        'severity': 'HIGH'
+                    # Store all headers for reference
+                    header_info['findings'].append({
+                        'type': 'info',
+                        'category': 'headers',
+                        'title': 'HTTP Response Headers',
+                        'data': {'headers': headers},
+                        'severity': 'info'
                     })
-                analysis['supported_protocols'].append(line)
-            
-            # Parse certificate information
-            if 'Subject:' in line:
-                analysis['certificate_info']['subject'] = line.split('Subject:')[1].strip()
-            elif 'Issuer:' in line:
-                analysis['certificate_info']['issuer'] = line.split('Issuer:')[1].strip()
         
-        return analysis
+        except Exception as e:
+            logger.debug(f"Header analysis failed: {str(e)}")
+            header_info['findings'].append({
+                'type': 'error',
+                'category': 'headers',
+                'title': 'Header Analysis Error',
+                'data': {'error': str(e)}
+            })
+        
+        return header_info
     
-    async def _detect_cms(self, web_service: Dict[str, Any]) -> Dict[str, Any]:
-        """Detect Content Management System"""
-        url = web_service['url']
+    async def _analyze_robots_sitemap(self, target: str) -> Dict[str, Any]:
+        """
+        Analyze robots.txt and sitemap.xml files
         
-        self.logger.info(f"Detecting CMS for {url}")
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: Robots/sitemap analysis results
+        """
+        analysis_info = {'findings': []}
         
         try:
-            timeout = aiohttp.ClientTimeout(total=30)
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.get(url) as response:
-                    html = await response.text()
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                # Check robots.txt
+                robots_url = urljoin(target, '/robots.txt')
+                try:
+                    async with session.get(robots_url, ssl=False) as response:
+                        if response.status == 200:
+                            robots_content = await response.text()
+                            
+                            # Parse robots.txt for interesting paths
+                            disallowed_paths = []
+                            for line in robots_content.split('\n'):
+                                if line.strip().startswith('Disallow:'):
+                                    path = line.split(':', 1)[1].strip()
+                                    if path and path != '/':
+                                        disallowed_paths.append(path)
+                            
+                            analysis_info['findings'].append({
+                                'type': 'info',
+                                'category': 'robots_sitemap',
+                                'title': 'Robots.txt Found',
+                                'data': {
+                                    'url': robots_url,
+                                    'content': robots_content,
+                                    'disallowed_paths': disallowed_paths
+                                },
+                                'severity': 'info'
+                            })
+                            
+                            # Check if interesting paths are accessible
+                            for path in disallowed_paths[:10]:  # Limit to first 10
+                                try:
+                                    test_url = urljoin(target, path)
+                                    async with session.head(test_url, ssl=False) as test_response:
+                                        if test_response.status == 200:
+                                            analysis_info['findings'].append({
+                                                'type': 'finding',  
+                                                'category': 'robots_sitemap',
+                                                'title': f'Accessible Disallowed Path: {path}',
+                                                'data': {'path': path, 'url': test_url},
+                                                'severity': 'low'
+                                            })
+                                except Exception:
+                                    continue
+                
+                except Exception:
+                    pass
+                
+                # Check sitemap.xml
+                sitemap_url = urljoin(target, '/sitemap.xml')
+                try:
+                    async with session.get(sitemap_url, ssl=False) as response:
+                        if response.status == 200:
+                            sitemap_content = await response.text()
+                            
+                            # Extract URLs from sitemap
+                            import xml.etree.ElementTree as ET
+                            try:
+                                root = ET.fromstring(sitemap_content)
+                                urls = []
+                                for url_elem in root.findall('.//{http://www.sitemaps.org/schemas/sitemap/0.9}url'):
+                                    loc_elem = url_elem.find('{http://www.sitemaps.org/schemas/sitemap/0.9}loc')
+                                    if loc_elem is not None:
+                                        urls.append(loc_elem.text)
+                                
+                                analysis_info['findings'].append({
+                                    'type': 'info',
+                                    'category': 'robots_sitemap',
+                                    'title': 'Sitemap.xml Found',
+                                    'data': {
+                                        'url': sitemap_url,
+                                        'urls_found': len(urls),
+                                        'sample_urls': urls[:20]  # First 20 URLs
+                                    },
+                                    'severity': 'info'
+                                })
+                                
+                            except ET.ParseError:
+                                analysis_info['findings'].append({
+                                    'type': 'info',
+                                    'category': 'robots_sitemap',
+                                    'title': 'Sitemap.xml Found (Invalid XML)',
+                                    'data': {'url': sitemap_url, 'content_preview': sitemap_content[:500]},
+                                    'severity': 'info'
+                                })
+                
+                except Exception:
+                    pass
+        
+        except Exception as e:
+            logger.debug(f"Robots/sitemap analysis failed: {str(e)}")
+        
+        return analysis_info
+    
+    async def _check_clickjacking(self, target: str) -> Dict[str, Any]:
+        """
+        Check for clickjacking vulnerability
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: Clickjacking check result
+        """
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                async with session.get(target, ssl=False) as response:
                     headers = dict(response.headers)
                     
-                    cms_detection = {
-                        'detected': False,
-                        'cms_name': 'Unknown',
-                        'version': 'Unknown',
-                        'confidence': 0,
-                        'indicators': []
+                    # Check for X-Frame-Options header
+                    x_frame_options = headers.get('X-Frame-Options', '').lower()
+                    csp = headers.get('Content-Security-Policy', '').lower()
+                    
+                    # Check if clickjacking protection is present
+                    protected = (
+                        x_frame_options in ['deny', 'sameorigin'] or
+                        'frame-ancestors' in csp
+                    )
+                    
+                    if not protected:
+                        return {
+                            'type': 'finding',
+                            'category': 'vulnerability',
+                            'title': 'Clickjacking Vulnerability',
+                            'data': {
+                                'description': 'Application may be vulnerable to clickjacking attacks',
+                                'missing_protections': ['X-Frame-Options', 'Content-Security-Policy frame-ancestors']
+                            },
+                            'severity': 'medium'
+                        }
+        
+        except Exception as e:
+            logger.debug(f"Clickjacking check failed: {str(e)}")
+        
+        return {}
+    
+    async def _check_cors_misconfiguration(self, target: str) -> Dict[str, Any]:
+        """
+        Check for CORS misconfiguration
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: CORS check result
+        """
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout)
+            ) as session:
+                
+                # Test with malicious origin
+                headers = {
+                    'Origin': 'https://evil.com',
+                    'User-Agent': self.user_agent
+                }
+                
+                async with session.options(target, headers=headers, ssl=False) as response:
+                    cors_headers = dict(response.headers)
+                    
+                    # Check if malicious origin is allowed
+                    allowed_origin = cors_headers.get('Access-Control-Allow-Origin', '')
+                    
+                    if allowed_origin == '*' or 'evil.com' in allowed_origin:
+                        return {
+                            'type': 'finding',
+                            'category': 'vulnerability',
+                            'title': 'CORS Misconfiguration',
+                            'data': {
+                                'description': 'CORS policy allows requests from any origin',
+                                'allowed_origin': allowed_origin
+                            },
+                            'severity': 'medium'
+                        }
+        
+        except Exception as e:
+            logger.debug(f"CORS check failed: {str(e)}")
+        
+        return {}
+    
+    async def _check_security_headers(self, target: str) -> List[Dict[str, Any]]:
+        """
+        Comprehensive security headers check
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            List[Dict[str, Any]]: Security header findings
+        """
+        findings = []
+        
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                async with session.get(target, ssl=False) as response:
+                    headers = dict(response.headers)
+                    
+                    # Critical security headers
+                    critical_headers = {
+                        'Strict-Transport-Security': {
+                            'severity': 'high',
+                            'description': 'HSTS header missing - HTTPS not enforced'
+                        },
+                        'Content-Security-Policy': {
+                            'severity': 'medium',
+                            'description': 'CSP header missing - XSS protection not implemented'
+                        }
                     }
                     
-                    # WordPress detection
-                    if self._detect_wordpress(html, headers):
-                        cms_detection.update({
-                            'detected': True,
-                            'cms_name': 'WordPress',
-                            'confidence': 90
-                        })
-                        cms_detection['indicators'].append('wp-content directory found')
+                    for header, info in critical_headers.items():
+                        if header not in headers and target.startswith('https://'):
+                            findings.append({
+                                'type': 'finding',
+                                'category': 'security_headers',
+                                'title': f'Missing {header} Header',
+                                'data': {'description': info['description']},
+                                'severity': info['severity']
+                            })
+        
+        except Exception as e:
+            logger.debug(f"Security headers check failed: {str(e)}")
+        
+        return findings
+    
+    async def _check_directory_listing(self, target: str) -> Dict[str, Any]:
+        """
+        Check for directory listing vulnerability
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: Directory listing check result
+        """
+        try:
+            # Common directories that might have listing enabled
+            test_dirs = ['/uploads/', '/images/', '/files/', '/backup/', '/temp/']
+            
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                for directory in test_dirs:
+                    try:
+                        test_url = urljoin(target, directory)
+                        async with session.get(test_url, ssl=False) as response:
+                            if response.status == 200:
+                                content = await response.text()
+                                
+                                # Check for directory listing indicators
+                                listing_indicators = [
+                                    'Index of /',
+                                    'Directory Listing',
+                                    'Parent Directory',
+                                    '<pre><a href="../">../</a>'
+                                ]
+                                
+                                if any(indicator in content for indicator in listing_indicators):
+                                    return {
+                                        'type': 'finding',
+                                        'category': 'vulnerability',
+                                        'title': f'Directory Listing Enabled: {directory}',
+                                        'data': {
+                                            'url': test_url,
+                                            'description': 'Directory listing is enabled, potentially exposing sensitive files'
+                                        },
+                                        'severity': 'medium'
+                                    }
+                    except Exception:
+                        continue
+        
+        except Exception as e:
+            logger.debug(f"Directory listing check failed: {str(e)}")
+        
+        return {}
+
+# Plugin interface for AutoRecon-Pro
+def run_plugin(target: str, options: Dict[str, Any] = None) -> Dict[str, Any]:
+    """
+    Plugin entry point for AutoRecon-Pro
+    
+    Args:
+        target (str): Target URL or domain
+        options (Dict[str, Any], optional): Plugin options
+        
+    Returns:
+        Dict[str, Any]: Plugin results
+    """
+    scanner = WebScanner(options)
+    
+    # Run the async scanner
+    import asyncio
+    
+    try:
+        if asyncio.get_running_loop():
+            # If already in an async context, create a new loop
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, scanner.scan_target(target, options))
+                return future.result()
+        else:
+            return asyncio.run(scanner.scan_target(target, options))
+    except Exception as e:
+        return {
+            'target': target,
+            'status': 'failed',
+            'error': str(e),
+            'findings': []
+        }f"Web scan failed for {target}: {str(e)}")
+            results['status'] = 'failed'
+            results['error'] = str(e)
+        
+        return results
+    
+    async def _check_url_accessibility(self, url: str) -> bool:
+        """
+        Check if URL is accessible
+        
+        Args:
+            url (str): URL to check
+            
+        Returns:
+            bool: True if accessible, False otherwise
+        """
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5)) as session:
+                async with session.head(url, ssl=False) as response:
+                    return response.status < 500
+        except Exception:
+            return False
+    
+    async def _gather_basic_info(self, target: str) -> Dict[str, Any]:
+        """
+        Gather basic information about the web application
+        
+        Args:
+            target (str): Target URL
+            
+        Returns:
+            Dict[str, Any]: Basic information
+        """
+        info = {'findings': []}
+        
+        try:
+            async with aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.timeout),
+                headers={'User-Agent': self.user_agent}
+            ) as session:
+                
+                async with session.get(target, ssl=False) as response:
+                    content = await response.text()
                     
-                    # Drupal detection
-                    elif self._detect_drupal(html, headers):
-                        cms_detection.update({
-                            'detected': True,
-                            'cms_name': 'Drupal',
-                            'confidence': 85
-                        })
-                        cms_detection['indicators'].append('Drupal markers found')
+                    # Basic response information
+                    info['findings'].append({
+                        'type': 'info',
+                        'category': 'basic_info',
+                        'title': 'HTTP Response Information',
+                        'data': {
+                            'status_code': response.status,
+                            'content_length': len(content),
+                            'content_type': response.headers.get('Content-Type', 'Unknown'),
+                            'server': response.headers.get('Server', 'Unknown'),
+                            'headers': dict(response.headers)
+                        }
+                    })
                     
-                    # Joomla detection
-                    elif self._detect_joomla(html, headers):
-                        cms_detection.update({
-                            'detected': True,
-                            'cms_name': 'Joomla',
-                            'confidence': 85
+                    # Extract title
+                    title_match = re.search(r'<title[^>]*>(.*?)</title>', content, re.IGNORECASE | re.DOTALL)
+                    if title_match:
+                        info['findings'].append({
+                            'type': 'info',
+                            'category': 'basic_info',
+                            'title': 'Page Title',
+                            'data': {'title': title_match.group(1).strip()}
                         })
-                        cms_detection['indicators'].append('Joomla markers found')
                     
-                    return cms_detection
+                    # Extract meta information
+                    meta_tags = re.findall(r'<meta[^>]+>', content, re.IGNORECASE)
+                    meta_info = {}
+                    for meta in meta_tags:
+                        name_match = re.search(r'name=["\']([^"\']+)["\']', meta, re.IGNORECASE)
+                        content_match = re.search(r'content=["\']([^"\']+)["\']', meta, re.IGNORECASE)
+                        if name_match and content_match:
+                            meta_info[name_match.group(1)] = content_match.group(1)
+                    
+                    if meta_info:
+                        info['findings'].append({
+                            'type': 'info',
+                            'category': 'basic_info',
+                            'title': 'Meta Information',
+                            'data': meta_info
+                        })
+                    
+                    # Extract forms
+                    forms = re.findall(r'<form[^>]*>.*?</form>', content, re.IGNORECASE | re.DOTALL)
+                    if forms:
+                        form_data = []
+                        for form in forms:
+                            action = re.search(r'action=["\']([^"\']*)["\']', form, re.IGNORECASE)
+                            method = re.search(r'method=["\']([^"\']*)["\']', form, re.IGNORECASE)
+                            inputs = re.findall(r'<input[^>]*>', form, re.IGNORECASE)
+                            
+                            form_info = {
+                                'action': action.group(1) if action else '',
+                                'method': method.group(1) if method else 'GET',
+                                'inputs': len(inputs)
+                            }
+                            form_data.append(form_info)
+                        
+                        info['findings'].append({
+                            'type': 'info',
+                            'category': 'basic_info',
+                            'title': 'Forms Detected',
+                            'data': {'forms': form_data}
+                        })
+                    
+                    # Extract links
+                    links = re.findall(r'href=["\']([^"\']+)["\']', content, re.IGNORECASE)
+                    external_links = [link for link in links if link.startswith(('http://', 'https://')) 
+                                    and not link.startswith(target)]
+                    
+                    if external_links:
+                        info['findings'].append({
+                            'type': 'info',
+                            'category': 'basic_info',
+                            'title': 'External Links',
+                            'data': {'external_links': external_links[:20]}  # Limit to first 20
+                        })
                     
         except Exception as e:
-            self.logger.error(f"CMS detection failed for {url}: {e}")
-            return {'detected': False, 'error': str(e)}
-    
-    def _detect_wordpress(self, html: str, headers: Dict[str, str]) -> bool:
-        """Detect WordPress"""
-        wp_indicators = [
-            'wp-content',
-            'wp-includes',
-            'wp-admin',
-            'wordpress',
-            '/wp-json/',
-            'wp-embed.min.js'
-        ]
-        
-        return any(indicator in html.lower() for indicator in wp_indicators)
-    
-    def _detect_drupal(self, html: str, headers: Dict[str, str]) -> bool:
-        """Detect Drupal"""
-        drupal_indicators = [
-            'drupal',
-            '/sites/default/',
-            'drupal.js',
-            'Drupal.settings',
-            '/misc/drupal.js'
-        ]
-        
-        return any(indicator in html.lower() for indicator in drupal_indicators)
-    
-    def _detect_joomla(self, html: str, headers: Dict[str, str]) -> bool:
-        """Detect Joomla"""
-        joomla_indicators = [
-            '/components/',
-            '/modules/',
-            '/templates/',
-            'joomla',
-            'com_content'
-        ]
-        
-        return any(indicator in html.lower() for indicator in joomla_indicators)
-    
-    async def _capture_screenshot(self, web_service: Dict[str, Any], output_dir: str) -> Dict[str, Any]:
-        """Capture web screenshot"""
-        url = web_service['url']
-        target = web_service['target']
-        port = web_service['port']
-        
-        self.logger.info(f"Capturing screenshot for {url}")
-        
-        # Screenshot filename
-        screenshot_file = f"{output_dir}/screenshot_{target}_{port}.png"
-        
-        # Use headless Chrome via Python (requires additional implementation)
-        # For now, we'll use a system command approach
-        
-        cmd_parts = [
-            'timeout', '30',
-            'google-chrome',
-            '--headless',
-            '--disable-gpu',
-            '--no-sandbox',
-            '--disable-dev-shm-usage',
-            '--virtual-time-budget=10000',
-            f'--window-size=1280,720',
-            f'--screenshot={screenshot_file}',
-            url
-        ]
-        
-        command = ' '.join(cmd_parts)
-        
-        result = await self.execute
+            logger.error(
