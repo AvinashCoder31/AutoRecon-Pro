@@ -1,0 +1,264 @@
+# AutoRecon-Py Pro v2.0 Requirements
+# Core Python Dependencies
+
+# Async and Network Libraries
+aiohttp>=3.8.0
+aiofiles>=23.0.0
+asyncio-throttle>=1.0.2
+websockets>=11.0.0
+
+# HTTP and Web Libraries
+requests>=2.28.0
+urllib3>=1.26.0
+httpx>=0.24.0
+selenium>=4.10.0
+beautifulsoup4>=4.11.0
+lxml>=4.9.0
+
+# Network and Security Libraries
+python-nmap>=0.7.1
+scapy>=2.5.0
+cryptography>=40.0.0
+pyOpenSSL>=23.0.0
+paramiko>=3.2.0
+
+# Data Processing and Parsing
+pyyaml>=6.0
+toml>=0.10.2
+xmltodict>=0.13.0
+python-dateutil>=2.8.0
+ipaddress>=1.0.23
+
+# Database and Storage
+sqlite3  # Built-in
+sqlalchemy>=2.0.0
+redis>=4.5.0
+
+# Reporting and Output
+jinja2>=3.1.0
+markdown>=3.4.0
+reportlab>=4.0.0
+xlsxwriter>=3.1.0
+plotly>=5.15.0
+
+# Image and Screenshot Processing
+pillow>=9.5.0
+wand>=0.6.11
+
+# Command Line and UI
+colorama>=0.4.6
+rich>=13.4.0
+click>=8.1.0
+prompt-toolkit>=3.0.38
+
+# DNS and Domain Tools
+dnspython>=2.3.0
+python-whois>=0.8.0
+sublist3r>=1.1
+
+# Subdomain Enumeration
+subfinder  # External tool
+amass      # External tool
+
+# Password and Hash Libraries
+hashlib    # Built-in
+bcrypt>=4.0.0
+passlib>=1.7.4
+
+# Logging and Monitoring
+loguru>=0.7.0
+psutil>=5.9.0
+
+# Testing and Development
+pytest>=7.4.0
+pytest-asyncio>=0.21.0
+black>=23.0.0
+flake8>=6.0.0
+
+# Optional Machine Learning for Pattern Recognition
+scikit-learn>=1.3.0
+numpy>=1.24.0
+pandas>=2.0.0
+
+# Documentation
+sphinx>=7.0.0
+mkdocs>=1.5.0
+
+# Configuration Management
+python-dotenv>=1.0.0
+configparser  # Built-in
+
+# Multithreading and Process Management
+concurrent.futures  # Built-in
+multiprocessing    # Built-in
+threading         # Built-in
+
+# File and Path Management
+pathlib     # Built-in
+os          # Built-in
+glob        # Built-in
+shutil      # Built-in
+
+# Regular Expressions and Text Processing
+re          # Built-in
+string      # Built-in
+textwrap    # Built-in
+
+# Time and Date
+time        # Built-in
+datetime    # Built-in
+
+# JSON and Data Serialization
+json        # Built-in
+pickle      # Built-in
+base64      # Built-in
+
+# System and OS Integration
+sys         # Built-in
+subprocess  # Built-in
+signal      # Built-in
+
+# Random and UUID
+random      # Built-in
+uuid        # Built-in
+
+# Math and Statistics
+math        # Built-in
+statistics  # Built-in
+
+# Internet and URL Parsing
+urllib      # Built-in
+html        # Built-in
+
+# Compression
+gzip        # Built-in
+zipfile     # Built-in
+tarfile     # Built-in
+
+# Memory and Performance Profiling
+memory-profiler>=0.60.0
+py-spy>=0.3.14
+
+# Additional Security Tools (External)
+# These need to be installed separately via system package manager
+
+# Required System Tools:
+# - nmap
+# - masscan
+# - gobuster
+# - feroxbuster
+# - nikto
+# - whatweb
+# - httpx
+# - subfinder
+# - amass
+# - nuclei
+# - sqlmap
+# - dirb
+# - dirbuster
+# - hydra
+# - john
+# - hashcat
+# - enum4linux
+# - smbclient
+# - smbmap
+# - rpcclient
+# - snmpwalk
+# - onesixtyone
+# - ftp
+# - telnet
+# - ssh
+# - nc (netcat)
+# - curl
+# - wget
+# - dig
+# - nslookup
+# - whois
+# - ping
+# - traceroute
+# - tcpdump
+# - wireshark-common
+# - tshark
+# - aircrack-ng
+# - hashid
+# - exiftool
+# - binwalk
+# - strings
+# - file
+# - xxd
+# - hexdump
+
+# Install system tools on Debian/Ubuntu:
+# sudo apt update && sudo apt install -y nmap masscan gobuster nikto whatweb \
+# httpx subfinder nuclei sqlmap dirb hydra enum4linux smbclient smbmap \
+# snmp snmp-mibs-downloader onesixtyone ftp telnet openssh-client netcat-openbsd \
+# curl wget dnsutils whois iputils-ping traceroute tcpdump tshark \
+# aircrack-ng hashid libimage-exiftool-perl binwalk binutils xxd
+
+# Install additional tools via Go (if needed):
+# go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+# go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+# go install -v github.com/projectdiscovery/nuclei/v2/cmd/nuclei@latest
+
+# Python package alternatives for some tools:
+python-nmap>=0.7.1        # Nmap wrapper
+requests-toolbelt>=1.0.0  # HTTP utilities
+paramiko>=3.2.0           # SSH client
+ftplib                    # Built-in FTP client
+telnetlib                 # Built-in Telnet client
+smtplib                   # Built-in SMTP client
+poplib                    # Built-in POP3 client
+imaplib                   # Built-in IMAP client
+
+# Browser automation (for screenshots)
+chromedriver-binary>=114.0.0
+geckodriver-autoinstaller>=0.1.0
+
+# Word lists (install separately)
+# /usr/share/wordlists/
+# - rockyou.txt
+# - dirb/
+# - dirbuster/
+# - metasploit/
+# - seclists/
+
+# Cloud provider SDKs (optional)
+boto3>=1.26.0            # AWS
+azure-identity>=1.13.0   # Azure
+google-cloud>=0.34.0     # GCP
+
+# API integrations (optional)
+shodan>=1.29.0
+censys>=2.2.0
+virustotal-python>=1.0.0
+
+# Machine Learning for advanced analysis (optional)
+tensorflow>=2.13.0
+torch>=2.0.0
+transformers>=4.30.0
+
+# Graph and visualization
+networkx>=3.1.0
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# Additional useful libraries
+tqdm>=4.65.0             # Progress bars
+python-magic>=0.4.27     # File type detection
+python-whois>=0.8.0      # WHOIS queries
+geoip2>=4.7.0           # GeoIP lookups
+user-agents>=2.2.0       # User agent strings
+
+# Email and communication
+smtplib                  # Built-in
+email                    # Built-in
+
+# Archive and compression
+py7zr>=0.20.0           # 7zip support
+rarfile>=4.0            # RAR support
+
+# Version constraint notes:
+# - Use >= for minimum versions to ensure compatibility
+# - Some tools may require specific versions for stability
+# - Always test in virtual environment before production use
+# - Pin exact versions in production deployments
