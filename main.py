@@ -25,7 +25,7 @@ import yaml
 # Core imports
 from core.config import Config
 from core.logger import Logger
-from nmap_scanner import TargetManager
+from core.nmap_scanner import TargetManager
 from core.plugin_manager import PluginManager
 from core.scanner_engine import ScannerEngine
 from core.report_generator import ReportGenerator
